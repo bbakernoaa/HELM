@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 5190)
+Total output lines: 442
+
 ---
 type: tutorial
 category: tutorials
@@ -73,7 +76,7 @@ int main(int argc, char** argv) {
     auto source = axis::topology::NamedGridRegistry::generate("O48");
     auto destination = axis::topology::NamedGridRegistry::generate("O96");
     axis::solver::RegridConfig config;
-    config.method = axis::solver::RegridMethod::Bilinear;
+    config.method = axis::solver::InterpolationMethod::Bilinear;
     axis::solver::WeightGenerator generator;
     auto weights = generator.generate(source, destination, config);
     weights.to_csr();
@@ -184,21 +187,104 @@ covers named, rule-generated and structured grids as well.
 
 ## 7. Select a method and its unmapped policy
 
-Choose the method from the meaning of the field and the conservation property
-you need, then set the configuration explicitly:
+Choose the method from the meaning of the field and the property you need, then
+set the configuration explicitly. AXIS has six implemented methods; the first
+four build point-sample style operators and the last two integrate over cell
+overlaps.
 
 | Method | Appropriate starting point | Validate with |
 | --- | --- | --- |
-| `Bilinear` | Smooth point-like fields | Analytic or trusted reference fields |
-| `Conservative1stOrder` | Cell averages and extensive quantities | Area-weighted integral and coverage |
-| `Conservative2ndOrder` | Smooth cell averages needing higher spatial accuracy | Integral, smooth-field error and extrema |
+| `Bilinear` | Smooth point-like fields | Analytic or trusted reference fields; constant reproduction |
+| `NearestNeighbor` | Categories, flags, or nearest-sample semantics | Category preservation, nearest distances and boundary behavior |
+| `Bicubic` | Smooth fields where a wider stencil is suitable | Analytic smooth field and new extrema |
+| `Patch` | Smooth fields on irregular meshes where local polynomial recovery helps | Analytic field, fit residuals and extrema |
+| `Conservative1stOrder` | Cell means or extensive quantities | Area-weighted integral and coverage |
+| `Conservative2ndOrder` | Smooth cell means needing lower diffusion | Integral, smooth-field error and extrema, with limiter on/off |
 
-`normalization` controls how partially covered destination cells are treated;
+### What the six methods calculate
+
+`Bilinear` interpolates from a local source neighborhood. On detected regular
+latitude/longitude grids, AXIS can locate the surrounding 2×2 cell-center
+stencil with index arithmetic and calculate the four product weights. The
+general path uses local geometry to form interpolation weights. Bilinear is a
+good first choice for a smooth point-like scalar, but it does not conserve an
+area integral.
+
+`NearestNeighbor` builds a spatial search structure over source cell centroids
+and assigns a destination centroid the value of its nearest source centroid
+(one matrix entry with weight 1). Regular grids can take a direct search path;
+spherical meshes use 3-D unit-sphere coordinates for nearest queries. This
+preserves discrete categories and is useful for masks or classes when nearest
+centroid is the intended rule. It creates discontinuities and is not
+conservative.
+
+`Bicubic` takes up to 16 nearby source centroids and constructs polynomial
+weights for a local cubic fit; when fewer neighbors are available, the fit
+uses a lower polynomial order. This wider stencil can represent smooth
+curvature more accurately than bilinear interpolation, but higher-order
+polynomials can overshoot between samples. Check extrema and the behavior near
+grid edges, poles, and longitude seams.
+
+`Patch` takes a local patch of up to 16 nearby source centroids, fits a
+six-term quadratic (`1, x, y, xy, x², y²`) by least squares, and evaluates it
+at the destination centroid. This local recovery can be useful for irregu…190 tokens truncated…ghboring values, using a
+least-squares gradient. Integrating that reconstruction over each overlap
+reduces first-order diffusion while retaining conservation. `use_limiter` turns
+on a Barth–Jespersen limiter to restrain new extrema. The limiter can reduce
+accuracy near sharp gradients; test both settings for the field of interest.
+
+The interpolation methods query centroids, so the spatial coordinates and
+stencil shape matter. For global spherical grids test cells spanning the
+longitude seam explicitly. Nearest-neighbor is especially simple to interpret;
+the polynomial fits may need a careful comparison against an analytic field.
+None of these methods makes an invalid mesh geometry valid.
+
+### Compare methods on a known field
+
+Before using a method in a production workflow, create a field with a known
+answer at destination locations. Compare the output error for bilinear,
+bicubic, and patch, and separately compare nearest-neighbor category or sample
+selection. For conservative methods, also calculate the area-weighted integral
+using the matrix's areas and coverage fractions. The following snippet shows
+how to select each C++ method; the same mesh pair can be reused while building
+one matrix at a time:
+
+```cpp
+using axis::solver::InterpolationMethod;
+
+const InterpolationMethod methods[] = {
+    InterpolationMethod::Bilinear,
+    InterpolationMethod::NearestNeighbor,
+    InterpolationMethod::Bicubic,
+    InterpolationMethod::Patch,
+    InterpolationMethod::Conservative1stOrder,
+    InterpolationMethod::Conservative2ndOrder,
+};
+
+for (const auto method : methods) {
+    axis::solver::RegridConfig candidate;
+    candidate.method = method;
+    candidate.unmapped = axis::solver::UnmappedAction::Error;
+    candidate.line_type = axis::solver::LineType::GreatCircle;
+    candidate.norm_type = axis::solver::NormType::FracArea;
+    candidate.use_limiter = (method == InterpolationMethod::Conservative2ndOrder);
+    auto candidate_weights = axis::solver::WeightGenerator::generate(
+        source, destination, candidate);
+    // Apply, then evaluate method-appropriate error/invariants.
+}
+```
+
+`FracArea` is useful where partial destination coverage should be normalized
+over its covered part. Use `DstArea` when the denominator should remain the full
+destination area. Compare integrals over the same covered domain; switching
+normalization changes partial-coverage values.
+
+`norm_type` controls how partially covered destination cells are treated;
 `unmapped` controls destinations with no source contribution. With `Ignore`,
 those output cells retain their previous value. Initialize the destination
 field deliberately so an unmapped cell cannot be mistaken for a computed zero.
-The maintained [weight-generation guide](https://github.com/NOAA-EMC/HELM/blob/develop/libs/axis/docs/weight_generation.md)
-documents configuration members and method-specific assumptions.
+The [API reference](../reference/axis.md#weight-generation-api) lists the
+configuration members, Python spellings, and method-specific contracts.
 
 ## 8. Apply one or many fields
 

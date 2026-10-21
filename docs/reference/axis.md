@@ -63,41 +63,50 @@ configuration to `WeightGenerator::generate`:
 
 ```cpp
 axis::solver::RegridConfig config;
-config.method = axis::solver::RegridMethod::Bilinear;
+config.method = axis::solver::InterpolationMethod::Bilinear;
 config.unmapped = axis::solver::UnmappedAction::Error;
 
 axis::solver::WeightGenerator generator;
 auto matrix = generator.generate(source, destination, config);
 ```
 
-The method and options currently documented by AXIS are:
+The six methods implemented by `InterpolationMethod` are listed below. Names
+and configuration members are taken from the public C++ header and Python
+nanobind parser on `develop`.
 
 | Setting | Values | Contract |
 | --- | --- | --- |
-| `method` | `Bilinear`, `Conservative1stOrder`, `Conservative2ndOrder` | Select interpolation or conservative reconstruction |
-| `normalization` | `DstArea`, `FracArea` | Select how overlap weights are normalized for partial coverage |
-| `unmapped` | `Ignore`, `Zero`, `Error` | Decide what to do when an active destination receives no source contribution |
-| `use_limiter` | `true`, `false` | Enable the documented monotonicity limiter for second-order conservative remapping |
-| `pole_threshold_deg` | degrees | Configure polar handling threshold |
+| `method` | `Bilinear`, `NearestNeighbor`, `Bicubic`, `Patch`, `Conservative1stOrder`, `Conservative2ndOrder` | Select one of the six operators described below |
+| `norm_type` | `DstArea`/`dstarea`, `FracArea`/`fracarea` | Select how conservative overlap weights treat partial destination coverage |
+| `line_type` | `GreatCircle`/`great_circle`, `Cartesian`/`cartesian` | Select spherical great-circle or planar geometry for overlap methods |
+| `unmapped` | `Ignore`/`ignore`, `Error`/`error` | Leave an uncovered destination row empty or throw during generation |
+| `use_limiter` | `true`, `false` | Enable the Barth–Jespersen limiter for second-order conservative reconstruction |
 
-The documented defaults are bilinear, destination-area normalization,
-`Ignore` for unmapped destinations, no second-order limiter, and an 85-degree
-pole threshold. Set each option that affects your scientific result
-explicitly, so changing defaults or upgrading AXIS cannot silently change the
-intended method.
+The C++ defaults are bilinear, `DstArea`, `GreatCircle`, `Ignore`, and no
+limiter. Set each option that affects your scientific result explicitly.
 
 ### Method behavior and normalization
 
-| Method | Main property | Validate with |
-| --- | --- | --- |
-| Bilinear | Smooth-field interpolation; the implementation uses spherical geometry and may fall back to inverse-distance weights if its local solve does not converge | Analytic fields and known values; constant reproduction on covered destinations |
-| First-order conservative | Area-overlap remapping intended to preserve the area-weighted integral | Compare covered source and destination integrals; inspect coverage |
-| Second-order conservative | Adds local gradient reconstruction; optional limiter controls new extrema | Integral, smooth-field error, and extrema with limiter on/off |
+| Method | Algorithm and output behavior | Good fit | Validate with |
+| --- | --- | --- | --- |
+| `Bilinear` | Locates a source neighborhood and forms local interpolation weights; regular lat/lon grids have an analytic index-arithmetic fast path. General meshes use a local spherical/tangent-plane solve and a fallback when the solve fails. | Smooth point-like fields | Analytic fields, constant reproduction, and seam/polar cases relevant to the grid |
+| `NearestNeighbor` | Builds a spatial index over source-cell centroids and assigns each destination centroid the closest source cell with weight 1. Regular grids can use direct index arithmetic; spherical searches use 3-D unit-sphere coordinates. | Categories, flags, or nearest-sample semantics | Category preservation, nearest-distance distribution, and uncovered/boundary behavior |
+| `Bicubic` | Queries up to 16 nearby source centroids and computes weights from a local polynomial fit with up to 16 terms; with fewer samples it reduces polynomial order. It is not an area-overlap method. | Smooth fields where a wider stencil is appropriate | Analytic smooth fields, extrema/overshoot, and irregular-grid conditioning |
+| `Patch` | Queries a local patch (up to 16 nearby centroids) and fits a six-term quadratic basis `[1, x, y, xy, x², y²]` by least squares, then evaluates that fit at the destination centroid. | Smooth fields on irregular meshes where local recovery is useful | Analytic fields, residuals, extrema, and sensitivity to patch geometry |
+| `Conservative1stOrder` | Computes source/destination polygon intersections and weights from overlap area. Regular and rectilinear grids use specialized overlap paths; general grids use spatial candidate search and polygon clipping. | Cell means, densities, and extensive quantities | Area-weighted integral over the same covered domain, coverage fractions, and constant fields |
+| `Conservative2ndOrder` | Reconstructs a linear field in each source cell from neighboring-cell gradients, optionally limits the reconstruction, and integrates it over each overlap. | Smooth cell means where first order is too diffusive | Area-weighted integral, smooth-field error, extrema, and limiter-on/off behavior |
+
+The methods do not all share the same geometry path. Conservative methods use
+`line_type` to select great-circle or Cartesian overlap geometry. Bilinear has
+a dedicated regular-grid path. Nearest-neighbor and polynomial methods select
+nearby cell centroids; for global spherical grids, inspect how the coordinate
+system and longitude seam affect that neighborhood. Do not infer a method's
+accuracy from its name alone: evaluate it on representative grids and fields.
 
 For a destination cell `j`, the documented conservative normalization choices
 are:
 
-| `Normalization` | Weight interpretation | Typical use |
+| `NormType` (`norm_type`) | Weight interpretation | Typical use |
 | --- | --- | --- |
 | `DstArea` | `overlap_area(i,j) / destination_area(j)` | Normalize by full destination area |
 | `FracArea` | `overlap_area(i,j) / (destination_area(j) * destination_coverage(j))` | Normalize over the covered part of a partially covered destination |
@@ -106,12 +115,15 @@ These choices differ on partial coverage. Record the setting with analysis
 outputs and compare integrals over the same covered domain; a constant-field
 test alone is not a substitute for a conservation test.
 
-Bilinear is intended for smooth point-like fields. First-order conservative
-remapping targets area-integrated quantities; second order reconstructs local
-gradients and can use a limiter. These are numerical choices, not just speed
-settings. `Ignore` leaves an unmapped output value untouched, so initialize
-that field to a deliberate fill value before apply. `Error` reports incomplete
-coverage; `Zero` writes zero for unmapped output.
+For a conservative matrix, `DstArea` stores overlap divided by the full
+destination area. `FracArea` normalizes by the covered destination area, so a
+constant field remains constant on a partially covered destination. The choice
+changes the result when coverage is incomplete and must be recorded with the
+weights. `Ignore` leaves an uncovered row empty; the C++ apply call therefore
+leaves that caller-provided output value unchanged. Initialize output to a
+deliberate fill value. `Error` throws during generation when an active
+destination is uncovered. A masked destination row is distinct: apply leaves
+it untouched.
 
 Header references:
 [configuration](https://github.com/NOAA-EMC/HELM/blob/develop/libs/axis/include/axis/solver/regrid_config.hpp) and
@@ -149,8 +161,9 @@ distributed decomposition.
 extents must match `n_src()` and `n_dst()`, and the variable counts must agree.
 The output field must be allocated and initialized when a policy can leave
 values unchanged: `Ignore` leaves active but unmapped destinations untouched,
-and a destination mask suppresses writes to its rows. `Zero` writes zero to
-unmapped active destinations; `Error` reports incomplete coverage.
+and a destination mask suppresses writes to its rows. With `Error`, generation
+reports incomplete coverage. The C++ `UnmappedAction` enum has no `Zero`
+member; initialize the output to zero when that fill behavior is required.
 
 ### Matrix representation and diagnostics
 

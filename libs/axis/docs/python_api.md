@@ -73,14 +73,22 @@ mesh = axis.NamedGridRegistry.generate("N128")
 
 ```python
 config = {
-    "method": "bilinear",               # or "conservative_1st", "conservative_2nd"
-    "normalization": "dst_area",         # or "frac_area"
-    "unmapped": "ignore",               # or "zero", "error"
+    "method": "bilinear",               # nearest_neighbor, bicubic, patch,
+                                          # conservative, conservative2nd
+    "norm_type": "dstarea",              # or "fracarea"
+    "line_type": "great_circle",         # or "cartesian"
+    "unmapped": "ignore",               # or "error"
     "use_limiter": False,
 }
 
 matrix = axis.WeightGenerator.generate(src, dst, config)
 ```
+
+The low-level binding method names map to `Bilinear`, `NearestNeighbor`,
+`Bicubic`, `Patch`, `Conservative1stOrder`, and `Conservative2ndOrder`.
+`conservative` selects first order; `conservative2nd` selects second order.
+The higher-level `axis.Regridder` wrapper has its own method aliases; consult
+its constructor documentation when using that interface.
 
 ## Applying Weights
 
@@ -156,14 +164,14 @@ src_mesh = axis.NamedGridRegistry.generate("O48")
 dst_mesh = axis.NamedGridRegistry.generate("O96")
 
 # Generate conservative weights
-config = {"method": "conservative_1st", "normalization": "dst_area"}
+config = {"method": "conservative", "norm_type": "dstarea"}
 matrix = axis.WeightGenerator.generate(src_mesh, dst_mesh, config)
 
 # Create a test field (constant = 1.0, should be preserved)
 src_field = np.ones(src_mesh.n_cells)
 dst_field = axis.apply(matrix, src_field)
 
-# Verify conservation (partition of unity for constant field)
+# Check constant-field reproduction. This is not by itself an integral test.
 print(f"Max deviation from 1.0: {np.max(np.abs(dst_field - 1.0)):.2e}")
 
 # Batch apply for atmosphere state
@@ -192,3 +200,4 @@ try:
 except ValueError as e:
     print(f"Caught: {e}")
 ```
+

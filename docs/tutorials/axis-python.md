@@ -80,13 +80,47 @@ config = {
 weights = axis.WeightGenerator.generate(source, destination, config)
 ```
 
-For cell-average or extensive data, evaluate `conservative_1st` or
-`conservative_2nd` instead. Conservative configurations can set
-`normalization` to `dst_area` or `frac_area`; those choices differ when a
-destination cell is only partly covered. The optional `use_limiter` setting
-controls the second-order monotonicity limiter. See the
+The low-level `axis.WeightGenerator` accepts all six native methods. Its
+`method` strings are `bilinear`, `nearest_neighbor`, `bicubic`, `patch`,
+`conservative` (first order), and `conservative2nd`. The supported options are
+`norm_type` (`dstarea` or `fracarea`), `line_type` (`great_circle` or
+`cartesian`), `unmapped` (`ignore` or `error`), and `use_limiter` (second order
+conservative only). The parser accepts the lower-case spellings shown and the
+corresponding C++ enum spellings where applicable.
+
+```python
+method_names = [
+    "bilinear",
+    "nearest_neighbor",
+    "bicubic",
+    "patch",
+    "conservative",
+    "conservative2nd",
+]
+
+for method in method_names:
+    config = {
+        "method": method,
+        "line_type": "great_circle",
+        "norm_type": "fracarea",
+        "unmapped": "error",
+        "use_limiter": method == "conservative2nd",
+    }
+    weights = axis.WeightGenerator.generate(source, destination, config)
+    result = axis.apply(weights, source_field)
+    # Compare result with a known solution or method-appropriate invariant.
+```
+
+Use nearest-neighbor for discrete categories only when nearest source centroid
+is the rule you want. Bicubic uses a local cubic polynomial fit from up to 16
+nearby centroids; patch uses a local least-squares quadratic fit. Both can
+overshoot smooth extrema and should be checked against an analytic field on
+representative meshes. First-order conservative uses overlap areas. Second
+order adds a neighbor-derived linear gradient and can apply a limiter. For the
+conservative methods, choose `norm_type` deliberately and compare area-weighted
+integrals over the same covered region. The
 [method and configuration reference](../reference/axis.md#weight-generation-api)
-before selecting production settings.
+explains the algorithm and its limits.
 
 ## 4. Apply one field and inspect the result
 

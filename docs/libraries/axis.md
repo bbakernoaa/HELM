@@ -11,10 +11,12 @@ and applies those weights to field data. The engine is C++ and Kokkos based;
 the repository also includes Fortran, Python, xarray/Dask and command-line
 interfaces, depending on build configuration.
 
-Choose AXIS when fields on one horizontal mesh need mapping to another. Select
-a method based on the numerical property required: bilinear interpolation or
-first- or second-order conservative remapping. Verify the installed AXIS
-version's documented method set before planning other interpolation schemes.
+Choose AXIS when fields on one horizontal mesh need mapping to another. AXIS
+provides four interpolation/reconstruction methods and two area-overlap methods:
+bilinear, nearest-neighbor, bicubic, patch, first-order conservative, and
+second-order conservative. Their assumptions differ, so choose from the field's
+meaning, geometry, and desired invariant rather than treating the method as a
+performance switch.
 
 ## Workflow
 
@@ -27,15 +29,19 @@ so reuse the matrix for compatible fields and regenerate it if those inputs chan
 A constant-field check is useful, but does not prove area conservation or
 accuracy for every field.
 
-| Field meaning | Method family to evaluate | Check beyond “it ran” |
+| Field meaning / goal | Starting method | What it does and what to check |
 | --- | --- | --- |
-| Smooth point-like field | Bilinear | Compare with an analytic or trusted solution |
-| Cell-average or extensive quantity | Conservative remapping | Compare area-weighted integrals and coverage |
+| Smooth point-like field | Bilinear | Interpolates from a local source neighborhood; compare with an analytic or trusted solution. |
+| Discrete labels or nearest-sample semantics | Nearest-neighbor | Copies one source-centroid value; check distance and coverage, especially near boundaries. |
+| Smooth field where a wider stencil is acceptable | Bicubic | Fits a local cubic polynomial to nearby centroids; check overshoot and behavior on irregular or seam-crossing grids. |
+| Smooth field on an irregular mesh where local polynomial recovery is useful | Patch | Fits a least-squares quadratic over a local patch; check conditioning, extrema, and spatial error. |
+| Cell means, densities, or extensive totals whose area integral matters | First-order conservative | Integrates source/destination cell overlap; compare area-weighted totals over the same covered region. |
+| Smooth cell means where lower diffusion is useful | Second-order conservative | Integrates a linearly reconstructed source field over overlaps; check conservation and extrema, with and without the limiter. |
 
-AXIS does not list a categorical nearest-neighbor method in the documented
-`RegridMethod` enum. Do not use bilinear interpolation for labels or other
-discrete categories; use a library/version that explicitly supports the
-required categorical remap.
+Nearest-neighbor is appropriate for categorical values when nearest-centroid
+assignment matches the intended semantics. It is not area conservative. The
+higher-order interpolation methods can overshoot; inspect extrema before
+accepting results.
 
 These are starting points, not automatic scientific choices. Coordinate
 conventions, masks, grid geometry, and acceptable error determine the method.
