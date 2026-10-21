@@ -146,3 +146,13 @@ docs/superpowers/
 specs/
 .github/agents/
 .github/prompts/
+
+# MkDocs local environment and shared Diataxis configuration
+.venv-docs/
+!.specify/
+.specify/*
+!.specify/extensions/
+.specify/extensions/*
+!.specify/extensions/spec-kit-diataxis-docs/
+.specify/extensions/spec-kit-diataxis-docs/*
+!.specify/extensions/spec-kit-diataxis-docs/diataxis-config.yml

@@ -1,0 +1,52 @@
+# Configuration for Diátaxis Documentation Sync
+# Copy this to `.specify/extensions/spec-kit-diataxis-docs/diataxis-config.yml` to customize.
+
+version: "1.1"
+
+# Target paths for Diátaxis segmentation
+paths:
+  docs_root: "docs/"
+  # Subdirectories mapping for advanced setups (leave blank or map to docs_root for flat hierarchy)
+  tutorials: "docs/tutorials/"
+  how_to: "docs/how-to/"
+  explanation: "docs/explanation/"
+  reference: "docs/reference/"
+
+# Document type specific configurations
+document_types:
+  tutorial: { category: "tutorials", path: "docs/tutorials/" }
+  howto: { category: "how_to", path: "docs/how-to/" }
+  explanation: { category: "explanation", path: "docs/explanation/" }
+  pr: { category: "explanation", path: "docs/explanation/" }
+  fivewhy: { category: "explanation", path: "docs/explanation/" }
+  reference: { category: "reference", path: "docs/reference/" }
+  adr: { category: "reference", path: "docs/reference/", prefix_format: "%04d" }
+  cheatsheet: { category: "reference", path: "docs/reference/" }
+  project: { category: "reference", path: "docs/reference/" }
+  wow: { category: "reference", path: "docs/reference/" }
+
+# Language parser and extraction preferences
+language_preferences:
+  python:
+    docstring_style: "google" # "google", "numpy", or "sphinx"
+    enforce_return_types: true
+  cpp:
+    style: "doxygen"          # "doxygen" or "standard"
+  fortran:
+    use_iso_c_bindings: true   # strictly document ISO_C_BINDING signatures if present
+
+# Climate Metadata Standard Rules
+metadata_standards:
+  enforce_cf_tables: true      # automatically build variable tables if NetCDF datasets change
+  required_table_columns:
+    - "Variable"
+    - "Standard Name"
+    - "Long Name"
+    - "Units"
+    - "Memory Layout"
+
+# Markdown Formatting & Layout options
+formatting:
+  max_line_length: 120
+  use_katex_math: true         # support LaTeX math blocks format ($ ... $ / $$ ... $$)
+  mermaid_theme: "neutral"

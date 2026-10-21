@@ -1,0 +1,103 @@
+site_name: HELM Documentation
+site_description: Diátaxis guides for the NOAA-EMC HELM libraries
+repo_url: https://github.com/NOAA-EMC/HELM
+repo_name: NOAA-EMC/HELM
+edit_uri: edit/develop/docs/
+docs_dir: docs
+site_dir: site
+strict: true
+theme:
+  name: material
+  features:
+  - navigation.tabs
+  - navigation.sections
+  - navigation.top
+  - content.code.copy
+  - search.suggest
+  - search.highlight
+  palette:
+  - scheme: default
+    primary: indigo
+    toggle:
+      icon: material/brightness-4
+      name: Switch to dark mode
+  - scheme: slate
+    primary: indigo
+    toggle:
+      icon: material/brightness-7
+      name: Switch to light mode
+plugins:
+- search
+markdown_extensions:
+- admonition
+- attr_list
+- toc:
+    permalink: true
+- pymdownx.highlight
+- pymdownx.superfences
+nav:
+- Home: README.md
+- AMIO:
+  - Overview: libraries/amio.md
+  - Tutorial: tutorials/amio.md
+  - How-to: how-to/amio.md
+  - Reference: reference/amio.md
+  - Explanation: explanation/amio.md
+- AXIS:
+  - Overview: libraries/axis.md
+  - C++ User Guide: tutorials/axis.md
+  - Python User Guide: tutorials/axis-python.md
+  - How-to: how-to/axis.md
+  - Reference: reference/axis.md
+  - Explanation: explanation/axis.md
+- BLEND:
+  - Overview: libraries/blend.md
+  - Tutorial: tutorials/blend.md
+  - How-to: how-to/blend.md
+  - Reference: reference/blend.md
+  - Explanation: explanation/blend.md
+- CONF:
+  - Overview: libraries/conf.md
+  - Tutorial: tutorials/conf.md
+  - How-to: how-to/conf.md
+  - Reference: reference/conf.md
+  - Explanation: explanation/conf.md
+- DAGR:
+  - Overview: libraries/dagr.md
+  - Tutorial: tutorials/dagr.md
+  - How-to: how-to/dagr.md
+  - Reference: reference/dagr.md
+  - Explanation: explanation/dagr.md
+- HALO:
+  - Overview: libraries/halo.md
+  - Tutorial: tutorials/halo.md
+  - How-to: how-to/halo.md
+  - Reference: reference/halo.md
+  - Explanation: explanation/halo.md
+- LOGS:
+  - Overview: libraries/logs.md
+  - Tutorial: tutorials/logs.md
+  - How-to: how-to/logs.md
+  - Reference: reference/logs.md
+  - Explanation: explanation/logs.md
+- SPAN:
+  - Overview: libraries/span.md
+  - Tutorial: tutorials/span.md
+  - How-to: how-to/span.md
+  - Reference: reference/span.md
+  - Explanation: explanation/span.md
+- TICK:
+  - Overview: libraries/tick.md
+  - Tutorial: tutorials/tick.md
+  - How-to: how-to/tick.md
+  - Reference: reference/tick.md
+  - Explanation: explanation/tick.md
+- Project:
+  - Architecture: architecture/project_charter.md
+  - AMIO migration: MIGRATION-amio.md
+  - Documentation workflow: how-to/documentation.md
+validation:
+  links:
+    anchors: warn
+    not_found: warn
+    unrecognized_links: warn
