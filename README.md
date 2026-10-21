@@ -18,7 +18,6 @@ HELM is split into independent micro-libraries:
 * **TICK:** (Tier 1) Time Integration & Chronology Kernel (The Time Manager)
 * **LOGS:** (Tier 1) Logging and State Syncronization (The Log Manager)
 * **AMIO:** (Tier 1b) Asyncronous Multidimensional Input Output (The IO Engine)
-* **AMIO:** (Tier 1b) Asyncronous Multidimensional Input Output (The IO Engine)
 
 ---
 
