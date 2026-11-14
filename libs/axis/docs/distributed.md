@@ -197,3 +197,9 @@ maximum rank closure was 8,832 cells (13.5% of the global mesh), estimated impor
 storage was 6,782,976 bytes, and maximum geometry payload was 10,240 bytes.
 Constant error was `2.22e-16`. These are memory-locality/correctness observations,
 not real MPI performance or proof of billion-cell operation.
+
+## Independent points
+
+For individual point records and containing-cell association, see
+[Point-to-mesh containment](point_mapping.md). `DistributedPointLocator` preserves
+point ownership and identity rather than collapsing records into destination cells.
