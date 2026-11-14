@@ -268,3 +268,15 @@ if(TARGET halo AND Kokkos_ENABLE_OPENMP)
             ENVIRONMENT "OMP_NUM_THREADS=${ranks};OMP_PROC_BIND=false")
     endforeach()
 endif()
+
+if(TARGET halo)
+    add_executable(axis_point_locator_tests test_point_locator_mpi.cpp)
+    target_link_libraries(axis_point_locator_tests PRIVATE axis)
+    foreach(ranks IN ITEMS 1 2 4 8)
+        add_test(NAME axis_point_locator_${ranks}_ranks
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks}
+                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:axis_point_locator_tests> ${MPIEXEC_POSTFLAGS})
+        set_tests_properties(axis_point_locator_${ranks}_ranks PROPERTIES TIMEOUT 120
+            ENVIRONMENT "OMP_NUM_THREADS=1;OMP_PROC_BIND=false")
+    endforeach()
+endif()
