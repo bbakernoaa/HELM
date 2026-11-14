@@ -82,6 +82,12 @@ jobs:
             cd libs/axis/build-ci && ctest -L property --output-on-failure
           '
 
+      - name: "Stage 5: Distributed MPI tests"
+        run: |
+          docker compose exec -T helm-dev bash -lc '
+            cd libs/axis/build-ci && OMPI_MCA_rmaps_base_oversubscribe=1 ctest -L mpi --output-on-failure
+          '
+
       - name: Tear down container
         if: always()
         run: docker compose down || true
