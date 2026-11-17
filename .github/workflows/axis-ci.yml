@@ -145,21 +145,13 @@ jobs:
       - name: Bring up HELM container
         run: docker compose up -d --build
 
-      - name: "Python and MPI tests and mypy"
+      - name: "Python Dask tests and mypy"
         run: |
           docker compose exec -T helm-dev bash -lc '
             set -e
             cd libs/axis
-            uv sync --no-managed-python --all-groups --extra mpi
+            uv sync --no-managed-python --all-groups --extra distributed
             uv run pytest -v -ra
-            python_executable=$(uv run python -c "import sys; print(sys.executable)")
-            for ranks in 1 2 4; do
-              OMPI_MCA_rmaps_base_oversubscribe=1 \
-                OMPI_MCA_mpi_yield_when_idle=1 \
-                OMPI_MCA_hwloc_base_binding_policy=none \
-                OMP_WAIT_POLICY=PASSIVE \
-                mpiexec -n "$ranks" "$python_executable" tests_python/mpi_point_locator_case.py
-            done
             uv run mypy
           '
 

@@ -193,6 +193,28 @@ with Client() as client:
 
 For distributed use, construct the graph while the desired `Client` is active, as above. If Distributed is not installed, use the `distributed` extra. The current local `uv.lock` resolves Dask 2026.7.1; OMD's Dask 2026.8.0 documentation informed the lifecycle design but is not a tested compatibility claim.
 
+### Distributed point location
+
+`axis.DistributedPointLocator` maps each point to its containing mesh cell and keeps the point rows as Dask arrays. It uses the active Dask cluster to choose the mesh partitioning automatically; callers provide one complete `axis.Mesh` and do not need to choose a partition count or create mesh shards. The client needs the complete mesh in memory while AXIS partitions it, so this interface does not support meshes larger than client memory. After setup, each worker retains only its own mesh shard and local point index.
+
+Install the optional Distributed dependency with `python -m pip install '.[distributed]'` or `uv sync --extra distributed`. Point IDs and coordinates must be Dask arrays with matching row chunks; the coordinate dimension must fit in one chunk. Result columns remain lazy until computed:
+
+```python
+from dask.distributed import Client
+import axis
+
+# mesh, cell_ids, point_ids, and coordinates are prepared before this block;
+# point_ids and coordinates are aligned Dask arrays.
+with Client() as client:
+    locator = axis.DistributedPointLocator(mesh, cell_ids, client=client)
+    result = locator.locate(point_ids, coordinates)
+    cell_future, partition_future = client.compute([result.cell_ids, result.owner_partitions])
+    mapped_cell_ids, owner_partitions = client.gather([cell_future, partition_future])
+    locator.close()
+```
+
+The result also includes point IDs, containment status, and each winning cell's row index within its owner partition. A point contained by multiple cells maps to the cell with the smallest stable cell ID. Compute results before closing the locator because lazy query graphs use the worker-local indexes.
+
 ---
 
 ## 💻 `axis-regrid` Command-Line Tool
