@@ -174,7 +174,13 @@ def _build(
         connectivity = inverse[connectivity]
     source = axis_py.make_ugrid_mesh(np.asfortranarray(xy), np.concatenate(offsets), connectivity, np.concatenate(masks))
     destination = axis_py.make_ugrid_mesh(*_load(target)[:4])
-    config = {"method": method, "line_type": "great_circle", "unmapped": "ignore", "norm_type": norm}
+    config = {
+        "method": method,
+        "line_type": "great_circle",
+        "unmapped": "ignore",
+        "extrap_method": "none",
+        "norm_type": norm,
+    }
     matrix = axis_py._generate_local_weight_block(source, destination, config)  # type: ignore[attr-defined]
     reconstruction = axis_py._pack_reconstruction(matrix) if matrix.has_linear_reconstruction else None  # type: ignore[attr-defined]
     return matrix.to_bytes(), reconstruction

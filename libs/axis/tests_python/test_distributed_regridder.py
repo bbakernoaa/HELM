@@ -26,6 +26,26 @@ def test_distributed_identity_and_unmapped(workers, processes):
         np.testing.assert_allclose(regridder.apply(data * 2, dim="cell").compute(), result.compute() * 2)
 
 
+def test_conservative_leaves_masked_and_in_tile_unmapped_rows_zero():
+    da = pytest.importorskip("dask.array")
+    distributed = pytest.importorskip("distributed")
+
+    def mesh(longitudes, mask):
+        return (
+            np.concatenate([cell(lon)[0] for lon in longitudes]),
+            np.arange(0, 4 * (len(mask) + 1), 4),
+            np.arange(4 * len(mask)),
+            np.asarray(mask, dtype=np.int32),
+        )
+
+    source = MeshTile(2, partial(mesh, [0, 1], [1, 1]))
+    target = MeshTile(3, partial(mesh, [0, 1, 3], [1, 0, 1]))
+    data = xr.DataArray(da.from_array([2.0, 3.0], chunks=1), dims=("cell",))
+    with distributed.Client(n_workers=2, threads_per_worker=1, processes=False, dashboard_address=None) as client:
+        result = DistributedRegridder(client).fit([source], [target]).apply(data, dim="cell").compute()
+    np.testing.assert_allclose(result, [2.0, 0.0, 0.0], atol=1e-10)
+
+
 def test_second_order_neighbor_ring_crosses_source_tiles():
     from axis.distributed_regridder import _active_nodes, _ring_rows
 

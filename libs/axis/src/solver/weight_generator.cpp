@@ -2984,6 +2984,20 @@ InterpolationMatrix<MemorySpace> WeightGenerator::generate_bilinear(const topolo
             return Vec2{u, v};
         };
 
+        // Preserve source values when a destination coincides with a source
+        // centroid. A degenerate candidate quad can otherwise pass the Newton
+        // test and mix unrelated values at an interpolation node.
+        for (int k = 0; k < n_avail; ++k) {
+            const auto source_index = static_cast<std::size_t>(values(begin + k).index);
+            if (src_cx(source_index) == px && src_cy(source_index) == py) {
+                weights_vec.push_back(1.0);
+                rows_vec.push_back(static_cast<index_t>(j));
+                cols_vec.push_back(static_cast<index_t>(source_index));
+                used_shape_functions = true;
+                break;
+            }
+        }
+
         // Phase A: Search for containing Quad
         if (n_avail >= 4 && !used_shape_functions) {
             for (int a = 0; a < n_avail - 3 && !used_shape_functions; ++a) {

@@ -277,3 +277,140 @@ Twelve cases cover constant/smooth/harmonic fields, both directions and both
 normalizations. See [polar results](evidence/polar_acceptance.md). Run
 `scripts/make_polar_figures.py` after the standard figure/table commands to
 export pole-centered maps and quality plots with common normalization scales.
+
+## Matched MPI and Python scaling
+
+The scaling drivers share a fixture manifest and a result format. The original
+Cartesian MPI benchmark remains useful for AXIS-only scaling diagnostics. Use
+the matched driver for a comparison with ESMF on spherical grids.
+
+### Build and run a local smoke
+
+From the HELM checkout, use the compiler, MPI and NetCDF-C environment that you
+will use at runtime. For a paired build, set `ESMFMKFILE` to the compatible
+ESMF installation before configuring. Omit
+`-DAXIS_PAPER_ENABLE_ESMF=ON` for an AXIS-only build.
+
+```sh
+cmake -S libs/axis -B /path/to/build -DCMAKE_BUILD_TYPE=Release \
+  -DAXIS_BUILD_PAPER=ON -DAXIS_PAPER_ENABLE_ESMF=ON \
+  -DAXIS_BUILD_BENCHMARKS=ON -DHALO_BUILD_FORTRAN=OFF
+cmake --build /path/to/build --parallel
+
+python -m pip install -r libs/axis/paper/requirements-benchmarks.txt
+python libs/axis/paper/scripts/benchmark.py fixture tiny \
+  --output /shared/axis-smoke-fixture --ranks 2
+```
+
+Use a Python environment with the compiled AXIS package for the AXIS pathway,
+and an environment with compatible xESMF and ESMPy builds for xESMF. The
+benchmark does not require xESMF in the main AXIS test environment. On systems
+with Docker, the existing `Dockerfile.benchmarks` supplies an ESMF environment
+for local experiments. Check the Python ABI when adding the AXIS wheel to that
+environment. Record the container image digest when using it for a result.
+
+Create `/shared/axis.json` with a path relative to the case file or an absolute
+manifest path. Use separate result directories for each launch.
+
+```json
+{
+  "engine": "axis",
+  "method": "bilinear",
+  "fixture": "axis-smoke-fixture/manifest.json",
+  "repetitions": 3,
+  "warmups": 1,
+  "reuse": [1, 10],
+  "scaling": "smoke"
+}
+```
+
+```sh
+python libs/axis/paper/scripts/benchmark.py mpi --case /shared/axis.json \
+  --build-dir /path/to/build --output /shared/results/mpi-axis \
+  --nodes 1 --ranks 2 --launcher mpiexec --live
+
+python libs/axis/paper/scripts/benchmark.py dask --case /shared/axis.json \
+  --output /shared/results/dask-axis --local-workers 2 --live
+```
+
+For the comparator case, copy the JSON and change the engine to `esmf` for MPI
+or `xesmf` for Python. Use a common, explicit `comparison_pair_id` when submitting
+separate Dask allocations as a planned pair, and a different pair ID for each
+independent replicate. The MPI batch wrapper automatically shares an allocation
+ID between engines. CLI commands without `--live` render a plan.
+
+The identity fixture isolates ordering, mask and scheduling errors. Use
+`--masked` for the conservative mask smoke and `--field smooth` for a
+nonconstant identity check. A method that fails the reference check remains in
+the audit output and cannot enter speedup summaries. For independent spherical
+reference cases, use `scripts/prepare_cases.py` and `axis_paper_reference` as
+described above, then partition the prepared files:
+
+```sh
+python libs/axis/paper/scripts/benchmark.py fixture paper \
+  --case /shared/case.nc --reference /shared/reference.nc \
+  --output /shared/partitioned --ranks 64 --abs-tolerance 1e-8
+```
+
+The tolerance in this command is an example for an exact or near-exact oracle.
+Choose tolerances for each physical field and method from the pilot and record
+them before measuring. Use the same global fixture when changing shard count
+in a strong sweep. Shards store explicit owners and global IDs. Match the
+native rank count to the shard count. Dask worker jobs can vary independently
+of tile count. Hash validation precedes timing and can warm storage caches.
+
+### Slurm preflight and runs
+
+Copy a site example from `config/slurm/` and set the real allocation,
+network interfaces, spill path, module activation and worker walltime. Keep the
+fixture and results on compute-visible storage. From an authorized submit or
+service host, validate the rendered plan before launching workers. Start with
+two compute hosts for the opt-in integration test.
+
+```sh
+AXIS_RUN_SLURM=1 AXIS_SLURM_PROFILE=/shared/site.json \
+AXIS_SLURM_SHARED_DIR=/shared/axis-tests \
+  python -m pytest -s libs/axis/tests_python/test_axis_slurm_jobqueue.py
+
+python libs/axis/paper/scripts/benchmark.py dask --site /shared/site.json \
+  --case /shared/axis.json --output /shared/results/dask-2-hosts --jobs 2 --launches 3 --live
+```
+
+The jobqueue launcher checks actual worker hosts, process counts and thread
+counts, then verifies the submitted worker jobs are gone after exit. Repeated
+launches rebuild weights in the same allocation. Worker RSS is a lifetime
+high-water mark, so use separate allocations when comparing engine memory.
+For MPI,
+set `AXIS_REPO`, `AXIS_BUILD`, `AXIS_RESULTS` and `AXIS_PYTHON` to absolute
+paths before submitting the paired job. Begin with one node, then repeat on
+two hosts with matching fixture shards.
+
+```sh
+# Ursa. On Gaea use --clusters=c6 --partition=batch and your site account.
+sbatch --account="$PROJECT" --partition=u1-compute --qos=batch \
+  --nodes=2 --ntasks=64 --ntasks-per-node=32 --cpus-per-task=1 \
+  --hint=nomultithread libs/axis/paper/scripts/axis-paper-scale.sbatch \
+  matched /shared/site.json /shared/axis.json /shared/esmf.json
+```
+
+The Dask comparison measures materialized output with persisted input, and
+reports provisioning and input reads separately. xESMF comparisons require a
+supported layout; the current adapter accepts rectilinear source and destination grids with
+verified cell ordering and whole latitude rows per tile. xESMF fit defaults to serial. The optional
+`fit_backend: "local_parallel"` uses xESMF's controller-local multiprocessing,
+with an explicit `fit_cores` limit. AXIS distributed fit and xESMF local fit
+use different compute and geometry-ingest scopes. Compare their matched apply
+phases, and report their setup and resource costs separately. Confirm intended
+input and output chunking, cache state and actual resource allocation before
+drawing conclusions. Record unsupported layouts and failures alongside runs.
+
+Use `scripts/benchmark_matrix.py` to render candidate points before freezing
+the production matrix. The published study needs two-host validation, at least
+three independent allocations per headline point, real spherical production
+grids at two resolutions, and a stress case recording memory and failures.
+Open `notebooks/axis_scaling.ipynb` on its synthetic example or a result bundle
+to check matching and produce plots. Synthetic and smoke runs are distinct
+from publication measurements.
+
+- [Gaea user guide](https://docs.rdhpcs.noaa.gov/systems/gaea_user_guide.html)
+- [Ursa user guide](https://docs.rdhpcs.noaa.gov/systems/ursa_user_guide.html)

@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "status": "pending_pilot",
+  "note": "Candidate resource points only. Select fixtures, site settings and science tolerances from live pilot evidence before freezing any publication matrix.",
+  "pilot_nodes": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "anchor_nodes": [
+    2,
+    8
+  ],
+  "post_pilot_nodes": [
+    16,
+    32
+  ],
+  "headline_allocations": 3,
+  "fresh_launches": 3,
+  "cores_per_node": 32,
+  "scenarios": [
+    {
+      "id": "mpi-fv3-to-latlon",
+      "pathway": "mpi",
+      "scaling": "strong",
+      "engines": [
+        "axis",
+        "esmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": true,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Use the same production FV3 to regular lat-lon fixture for every allocation. Prepare separate fixtures at two pilot-approved resolutions."
+    },
+    {
+      "id": "mpi-latlon-to-fv3",
+      "pathway": "mpi",
+      "scaling": "strong",
+      "engines": [
+        "axis",
+        "esmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": false,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Use the reverse production grid pair and preserve global IDs at each rank layout. Prepare separate fixtures at two pilot-approved resolutions."
+    },
+    {
+      "id": "mpi-ocean-coast",
+      "pathway": "mpi",
+      "scaling": "strong",
+      "engines": [
+        "axis",
+        "esmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": false,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Use a production curvilinear/coastal case with a verified mask and common covered area."
+    },
+    {
+      "id": "mpi-weak-spherical",
+      "pathway": "mpi",
+      "scaling": "weak",
+      "engines": [
+        "axis",
+        "esmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": false,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Use engineered spherical fixtures with approximately constant cells and fields per rank. Verify halo-overlap growth."
+    },
+    {
+      "id": "mpi-stress",
+      "pathway": "mpi",
+      "scaling": "stress",
+      "engines": [
+        "axis",
+        "esmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": false,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Select a production spherical fixture that tests resource limits after a successful paired pilot."
+    },
+    {
+      "id": "python-supported-grid",
+      "pathway": "python",
+      "scaling": "strong",
+      "engines": [
+        "axis",
+        "xesmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": true,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Select production grids that both Python APIs support under matching semantics. Use fixed shared-storage chunks and byte-equivalent logical inputs."
+    },
+    {
+      "id": "python-weak-tiles",
+      "pathway": "python",
+      "scaling": "weak",
+      "engines": [
+        "axis",
+        "xesmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": false,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Grow cells and tiles with worker hosts while keeping per-worker input, chunk sizes, and intended overlap approximately constant."
+    },
+    {
+      "id": "python-stress",
+      "pathway": "python",
+      "scaling": "stress",
+      "engines": [
+        "axis",
+        "xesmf"
+      ],
+      "methods": [
+        "bilinear",
+        "conservative"
+      ],
+      "anchor": false,
+      "fixture": null,
+      "tolerance": null,
+      "fixture_policy": "Select a production shared-storage case with an explicit memory budget. Record chunking, spill, misses, and non-comparable backend modes."
+    }
+  ]
+}

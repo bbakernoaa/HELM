@@ -1,0 +1,15 @@
+{
+  "account": "YOUR_PROJECT",
+  "queue": "u1-compute",
+  "qos": "batch",
+  "cores": 32,
+  "processes": 32,
+  "memory": "64 GiB",
+  "walltime": "01:00:00",
+  "interface": "REPLACE_WORKER_INTERFACE",
+  "scheduler_interface": "REPLACE_SCHEDULER_INTERFACE",
+  "local_directory": "/REPLACE_WITH_NODE_LOCAL_SPILL",
+  "worker_timeout_s": 1800,
+  "job_script_prologue": [],
+  "job_extra_directives": []
+}
