@@ -74,7 +74,7 @@ set(AXIS_UNIT_TEST_SOURCES
     test_conservation.cpp
     test_constant_field.cpp
     test_linear_conservative.cpp
-    test_performance_changes.cpp
+    test_solver_regressions.cpp
     test_bilinear_exactness.cpp
     test_bilinear_rect.cpp
     test_bilinear_rect_nonuniform.cpp
@@ -138,6 +138,20 @@ set_target_properties(axis_unit_tests PROPERTIES
 )
 
 gtest_discover_tests(axis_unit_tests
+    PROPERTIES LABELS "unit"
+    DISCOVERY_TIMEOUT 30
+)
+
+# Keep this suite in its own executable: several legacy AXIS suites finalize
+# Kokkos from their global test environments, so combining another Kokkos
+# lifecycle into axis_unit_tests can leave later suites running after finalize.
+add_executable(axis_sample_position_tests test_sample_position_weights.cpp)
+target_link_libraries(axis_sample_position_tests PRIVATE axis GTest::gtest_main)
+set_target_properties(axis_sample_position_tests PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+)
+gtest_discover_tests(axis_sample_position_tests
     PROPERTIES LABELS "unit"
     DISCOVERY_TIMEOUT 30
 )
@@ -239,7 +253,7 @@ if(TARGET halo)
         add_test(NAME axis_distributed_${ranks}_ranks
             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks}
                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:axis_distributed_mpi_tests> ${MPIEXEC_POSTFLAGS})
-        set_tests_properties(axis_distributed_${ranks}_ranks PROPERTIES PROCESSORS ${ranks} TIMEOUT 180
+        set_tests_properties(axis_distributed_${ranks}_ranks PROPERTIES LABELS "mpi" PROCESSORS ${ranks} TIMEOUT 180
             ENVIRONMENT "OMP_NUM_THREADS=1;OMP_PROC_BIND=false")
     endforeach()
 endif()
@@ -250,7 +264,7 @@ if(TARGET halo AND Kokkos_ENABLE_OPENMP)
         add_test(NAME axis_distributed_hybrid_${ranks}x${ranks}
             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${ranks}
                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:axis_distributed_mpi_tests> ${MPIEXEC_POSTFLAGS})
-        set_tests_properties(axis_distributed_hybrid_${ranks}x${ranks} PROPERTIES PROCESSORS ${slots} TIMEOUT 180
+        set_tests_properties(axis_distributed_hybrid_${ranks}x${ranks} PROPERTIES LABELS "mpi" PROCESSORS ${slots} TIMEOUT 180
             ENVIRONMENT "OMP_NUM_THREADS=${ranks};OMP_PROC_BIND=false")
     endforeach()
 endif()

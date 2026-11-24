@@ -1,4 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Public horizontal regridding API built on the compiled AXIS engine.
+
+Defines :class:`Regridder`, which generates or loads interpolation weights and
+applies them to NumPy, xarray, or Dask-backed fields, including distributed
+execution where weights are installed once per worker.
+"""
+
 import logging
 import time
 import uuid
@@ -62,7 +69,7 @@ class Regridder:
         self._weights_matrix: axis_py.Matrix | None = None
         self._serialized_weights: bytes | None = None
         self._total_weights: np.ndarray | None = None
-        self._registered_clients = weakref.WeakKeyDictionary()
+        self._registered_clients: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
         self._method_map = {
             "bilinear": axis_py.Method.Bilinear,
@@ -214,7 +221,14 @@ class Regridder:
             config["dst_mask"] = np.asarray(dst_mask, dtype=np.int32)
 
         self._weights_matrix = axis_py.generate_weights(src_mesh, dst_mesh, config)
-        self._serialized_weights = self._weights_matrix.to_bytes()
+        # to_bytes() serializes only first-order weights; skip it for matrices
+        # carrying field-dependent linear reconstruction so no path can silently
+        # reload a degraded 1st-order operator. Serialization-dependent APIs
+        # (to_file, to_esmf, Dask Distributed) reject such matrices explicitly.
+        if self._weights_matrix.has_linear_reconstruction:
+            self._serialized_weights = None
+        else:
+            self._serialized_weights = self._weights_matrix.to_bytes()
 
         # Compute total weights sum for NaN-aware re-normalization
         if self.skipna:
@@ -228,7 +242,7 @@ class Regridder:
         logger.info(
             f"AXIS: Weight generation compiled successfully in {elapsed:.4f} seconds. "
             f"Mapped: {self._weights_matrix.n_src} source nodes -> {self._weights_matrix.n_dst} target nodes. "
-            f"Weight database size: {len(self._serialized_weights) / (1024 * 1024):.3f} MB."
+            f"Weight database size: {len(self._serialized_weights) / (1024 * 1024) if self._serialized_weights else 0.0:.3f} MB."
         )
 
         return self
@@ -259,13 +273,18 @@ class Regridder:
         """
         Save the compiled sparse regridding weights to a binary file for future reuse.
         """
+        if self._weights_matrix is not None and self._weights_matrix.has_linear_reconstruction:
+            raise ValueError(
+                "Binary weight serialization does not support field-dependent linear reconstruction "
+                "(Conservative2ndOrder); saving would silently degrade the operator to 1st order."
+            )
         if self._serialized_weights is None:
             raise RuntimeError("Cannot save weights: Regridder has not been compiled or fit.")
         with open(filename, "wb") as f:
             f.write(self._serialized_weights)
 
     def close(self) -> None:
-        """Release this regridder's local cache entries and worker plugins."""
+        """Release this regridder's native weights, cache entries, and worker plugins."""
         weights_key = f"weights_{self._uid}"
         total_key = f"tw_{self._uid}_sum"
         _WORKER_CACHE.pop(weights_key, None)
@@ -276,8 +295,16 @@ class Regridder:
             except Exception:
                 logger.debug("Could not unregister AXIS worker plugin %s", plugin_name, exc_info=True)
         self._registered_clients.clear()
+        # Drop the owning Python reference to nanobind's C++ Matrix as well as
+        # its serialized copy. Keeping the matrix alive after close defeats the
+        # cleanup contract and can leave native Kokkos allocations to interpreter
+        # shutdown, when extension objects are being finalized.
+        self._weights_matrix = None
+        self._serialized_weights = None
+        self._total_weights = None
 
     def __del__(self):
+        """Best-effort close; cleanup must never mask shutdown or prior errors."""
         try:
             self.close()
         except Exception:
@@ -286,11 +313,19 @@ class Regridder:
 
     def _prepare_distributed_weights(self, client, weights_key: str) -> None:
         """Register matrix and optional skipna sums on current and future workers."""
-        if self.skipna and not self._weights_matrix.is_csr:
-            self._weights_matrix.to_csr()
-            self._serialized_weights = self._weights_matrix.to_bytes()
+        weights_matrix = self._weights_matrix
+        if weights_matrix is None:
+            raise RuntimeError("Regridder must be fit before registering distributed weights.")
+        if weights_matrix.has_linear_reconstruction:
+            raise ValueError(
+                "Dask Distributed weight serialization does not support field-dependent linear reconstruction "
+                "(Conservative2ndOrder); workers would silently apply 1st-order weights. Use a local scheduler instead."
+            )
+        if self.skipna and not weights_matrix.is_csr:
+            weights_matrix.to_csr()
+            self._serialized_weights = weights_matrix.to_bytes()
         if self._serialized_weights is None:
-            self._serialized_weights = self._weights_matrix.to_bytes()
+            self._serialized_weights = weights_matrix.to_bytes()
 
         total_key = f"tw_{self._uid}_sum" if self._total_weights is not None else None
         plugin_name = f"axis-weights-{self._uid}"
@@ -306,7 +341,7 @@ class Regridder:
             self._registered_clients[client] = plugin_name
 
         # Explicit local schedulers used by the driver can share this process cache.
-        _setup_worker_cache(weights_key, self._weights_matrix)
+        _setup_worker_cache(weights_key, weights_matrix)
         if total_key is not None:
             _setup_worker_cache(total_key, self._total_weights)
 
@@ -316,6 +351,11 @@ class Regridder:
         """
         if self._weights_matrix is None:
             raise RuntimeError("Cannot save weights: Regridder has not been compiled or fit.")
+        if self._weights_matrix.has_linear_reconstruction:
+            raise ValueError(
+                "ESMF weight export does not support field-dependent linear reconstruction "
+                "(Conservative2ndOrder); the file would silently contain only 1st-order weights."
+            )
         if not hasattr(axis_py, "write_esmf"):
             raise RuntimeError("ESMF weight export is unavailable. AXIS was compiled without NetCDF support.")
         axis_py.write_esmf(filename, self._weights_matrix)

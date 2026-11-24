@@ -2,11 +2,19 @@
 // AXIS — Arbitrary eXgrid Interpolation Solver
 // Copyright (c) HELM Project Contributors
 
+/// @file src/distributed/distributed_weight_generator.cpp
+/// @brief MPI-distributed horizontal weight generation for AXIS regridding.
+///
+/// Builds the destination-owned sparse weight matrix across ranks, borrowing
+/// the caller's communicator through HALO and falling back to local generation
+/// on a single rank.
+
 #include <algorithm>
 #include <axis/distributed/distributed_weight_generator.hpp>
 #include <axis/solver/weight_generator.hpp>
 #include <halo/collectives.hpp>
 #include <halo/communicator.hpp>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -33,7 +41,11 @@ solver::InterpolationMatrix<MemorySpace> DistributedWeightGenerator<MemorySpace>
     const std::size_t n_src_local = local_src_mesh.n_cells();
     const std::size_t n_dst_local = local_dst_mesh.n_cells();
 
-    // 2. Gather all destination mesh global cell offsets to map global indices
+    // 2. Gather all destination mesh global cell offsets to map global indices.
+    // The counts are exchanged as int, so every rank must fit before the
+    // narrowing; collective_require makes all ranks fail together.
+    halo::collective_require(h_comm, n_dst_local <= static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                             "distributed weight generation: local destination cell count exceeds INT_MAX");
     int local_dst_count = static_cast<int>(n_dst_local);
 
     auto dst_counts = halo::allgather(h_comm, &local_dst_count, 1);

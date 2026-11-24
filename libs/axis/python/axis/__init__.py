@@ -20,7 +20,9 @@ from .grid import (
     UnstructuredMesh,
     RuleGeometry,
 )
+from .conservative_vertical import ConservativeVerticalRegridder, regrid_tracer_3d
 from .regridder import Regridder
+from .distributed_regridder import DistributedRegridder, MeshTile
 from .vector import VectorRegridder
 from .vertical import VerticalRegridder, regrid_3d
 
@@ -53,6 +55,8 @@ from .axis_py import (
 )
 
 __all__ = [
+    "DistributedRegridder",
+    "MeshTile",
     "Regridder",
     "Geometry",
     "RectilinearGrid",
@@ -65,6 +69,8 @@ __all__ = [
     "GridFactory",
     "VectorRegridder",
     "VerticalRegridder",
+    "ConservativeVerticalRegridder",
+    "regrid_tracer_3d",
     "regrid_3d",
     "Mesh",
     "Matrix",

@@ -1,4 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Mesh construction from structured, unstructured, and named-grid geometries.
+
+Provides the low-level Geometry classes that convert lat/lon vectors, 2-D
+curvilinear arrays, Gaussian and reduced-Gaussian rows, cubed-sphere face
+layouts, and CSR unstructured meshes into the engine's internal
+``axis_py.Mesh``, plus the xarray auto-detection helpers used by ``Grid``.
+"""
 
 from typing import NamedTuple
 
@@ -357,8 +364,6 @@ def _triangulate_mpas_mesh(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarray, np.n
     v2 = conn_raw[:, 2:] - 1
 
     element_conn = np.stack([v0[mask], v1[mask], v2[mask]], axis=1).flatten()
-    np.repeat(np.arange(n_cells), max_tris)[mask.flatten()]
-
     return node_lon, node_lat, element_conn.astype(np.int64)
 
 
@@ -422,7 +427,12 @@ def _get_ugrid_info(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 def create_axis_mesh(ds: xr.Dataset, method: str | None = None) -> axis_py.Mesh:
-    """Build a native C++ Kokkos-parallel AXIS Mesh from an xarray dataset."""
+    """Adapt xarray/CF metadata to the native C++ mesh constructors.
+
+    This layer handles Python-specific dataset discovery and dimension selection;
+    geometry construction, corner policies, triangulation, and mesh assembly are
+    delegated to the AXIS C++ bindings.
+    """
     lon, lat, shape, dims, is_unstructured = _get_mesh_info(ds, method)
 
     if is_unstructured:
@@ -628,10 +638,12 @@ class XarrayGeometry(Geometry):
     """Wraps an xarray Dataset or DataArray to defer mesh construction."""
 
     def __init__(self, ds: xr.Dataset | xr.DataArray, method: str | None = None):
+        """Wrap a labeled dataset, optionally pinning the SCRIP detection method."""
         self.ds = ds
         self.method = method
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Build the mesh via xarray coordinate auto-detection."""
         # Keep 100% of existing, verified auto-detection and triangulation/centering logic!
         ds_normalized = self.ds.to_dataset(name="_tmp_data") if isinstance(self.ds, xr.DataArray) else self.ds
         return create_axis_mesh(ds_normalized, self.method)
@@ -643,12 +655,14 @@ class RectilinearGrid(Geometry):
     """
 
     def __init__(self, lons: np.ndarray, lats: np.ndarray, *, longitude_periodic: bool = False, longitude_period: float = 360.0):
+        """Store 1-D cell-center coordinates and longitude periodicity options."""
         self.lons = np.asarray(lons, dtype=np.float64)
         self.lats = np.asarray(lats, dtype=np.float64)
         self.longitude_periodic = bool(longitude_periodic)
         self.longitude_period = float(longitude_period)
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Convert centers to a rectilinear mesh using midpoint cell edges."""
         lon_bounds = _rectilinear_cell_edges(self.lons)
         lat_bounds = _rectilinear_cell_edges(self.lats, clamp=(-90.0, 90.0))
         return _structured_mesh_from_centers(
@@ -678,6 +692,7 @@ class GaussianGrid(Geometry):
         longitude_periodic: bool = True,
         longitude_period: float = 360.0,
     ):
+        """Store center vectors and optional authoritative quadrature weights."""
         self.lons = np.asarray(lons, dtype=np.float64)
         self.lats = np.asarray(lats, dtype=np.float64)
         self.latitude_weights = None if latitude_weights is None else np.asarray(latitude_weights, dtype=np.float64)
@@ -685,6 +700,11 @@ class GaussianGrid(Geometry):
         self.longitude_period = float(longitude_period)
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Accumulate latitude weights into exact quadrature band boundaries.
+
+        Weights are derived from the nodes when not supplied; non-Gaussian
+        centers without weights raise ValueError.
+        """
         if self.lons.ndim != 1 or self.lats.ndim != 1 or self.lats.size == 0:
             raise ValueError("GaussianGrid requires non-empty one-dimensional longitude and latitude centers")
         if self.latitude_weights is None:
@@ -741,6 +761,7 @@ class CurvilinearGrid(Geometry):
         corner_lons: np.ndarray | None = None,
         corner_lats: np.ndarray | None = None,
     ):
+        """Store 2-D center arrays plus projection, corner, and periodicity options."""
         self.lons = np.asarray(lons, dtype=np.float64)
         self.lats = np.asarray(lats, dtype=np.float64)
         self.proj_string = proj_string
@@ -751,6 +772,11 @@ class CurvilinearGrid(Geometry):
         self.corner_lats = None if corner_lats is None else np.asarray(corner_lats, dtype=np.float64)
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Build a projected mesh (when proj_string is set) or an explicit-corner mesh.
+
+        Without explicit corners, the selected corner_policy synthesizes them
+        from the center arrays.
+        """
         if self.proj_string:
             return axis_py.make_projected_mesh(
                 self.lons.shape[1],
@@ -808,6 +834,7 @@ class ReducedGaussianGrid(Geometry):
         increasing: bool = True,
         conforming: bool = True,
     ):
+        """Store shared latitude bounds and one longitude-bound vector per row."""
         self.latitude_bounds = np.asarray(latitude_bounds, dtype=np.float64)
         self.longitude_bounds_by_row = [np.asarray(row, dtype=np.float64) for row in longitude_bounds_by_row]
         self.longitude_periodic = bool(longitude_periodic)
@@ -816,6 +843,7 @@ class ReducedGaussianGrid(Geometry):
         self.conforming = bool(conforming)
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Emit mixed-arity CSR cells honoring the row's latitude band extent."""
         return axis_py.make_reduced_gaussian_mesh(
             self.latitude_bounds,
             self.longitude_bounds_by_row,
@@ -843,12 +871,14 @@ class MultiFaceGrid(Geometry):
         coordinate_system: axis_py.CoordinateSystem = axis_py.CoordinateSystem.SphericalDeg,
         vertex_equivalences: list[list[tuple[int, int, int]]] | None = None,
     ):
+        """Store face dictionaries, connection dictionaries, and corner equivalences."""
         self.faces = faces
         self.connections = connections
         self.coordinate_system = coordinate_system
         self.vertex_equivalences = vertex_equivalences or []
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Merge equivalent corner nodes and emit one CSR mesh across all faces."""
         return axis_py.make_multiface_mesh(self.faces, self.connections, self.coordinate_system, self.vertex_equivalences)
 
 
@@ -863,11 +893,13 @@ class UnstructuredMesh(Geometry):
         connectivity_offsets: np.ndarray,
         connectivity_indices: np.ndarray,
     ):
+        """Store Fortran-ordered node coordinates and zero-based CSR connectivity."""
         self.coords = np.asfortranarray(node_coords, dtype=np.float64)
         self.offsets = np.asarray(connectivity_offsets, dtype=np.int64)
         self.indices = np.asarray(connectivity_indices, dtype=np.int64)
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Pass the CSR arrays straight to the engine mesh builder."""
         return axis_py.make_ugrid_mesh(self.coords, self.offsets, self.indices)
 
 
@@ -877,9 +909,11 @@ class RuleGeometry(Geometry):
     """
 
     def __init__(self, config: dict):
+        """Store the rule specification consumed by the engine generator."""
         self.config = config
 
     def to_mesh(self) -> axis_py.Mesh:
+        """Generate the mesh from abstract rules (e.g. regular lat/lon tiling)."""
         return axis_py.generate_mesh_from_rules(self.config)
 
 
