@@ -278,6 +278,40 @@ normalizations. See [polar results](evidence/polar_acceptance.md). Run
 `scripts/make_polar_figures.py` after the standard figure/table commands to
 export pole-centered maps and quality plots with common normalization scales.
 
+## Run the Gaea C6 pilot
+
+The master script builds the native tools, prepares spherical fixtures, runs the
+paper smoke suite, submits paired MPI and Dask scaling runs, checks two-host
+Dask placement, and executes the analysis notebook. It waits for each job.
+
+Load the compiler, MPI, NetCDF-C, ESMF, and Python environment you will use on
+Gaea. Set `ESMFMKFILE` to the installed ESMF `esmf.mk`. The Python environment
+must include the built AXIS package, xESMF/ESMPy, and the packages in
+`requirements-benchmarks.txt`. Copy
+`config/slurm/gaea-c6.example.json` to shared storage and replace its account,
+network interfaces, and worker-local spill path. Set `cores` and `processes`
+to the ranks per node, and add module activation commands to
+`job_script_prologue` if workers need them.
+
+Run from a Gaea submit host, choosing a new output directory on shared storage:
+
+```sh
+bash libs/axis/paper/scripts/run-gaea-paper.sh --account PROJECT \
+  --site /shared/path/gaea-site.json --output /shared/path/axis-pilot
+```
+
+Add `--dry-run` to preview settings without creating files or submitting
+jobs. Run with `--help` to change the node counts, grid size, repetitions,
+Python executable, build directory, or walltime. Defaults use one and two
+worker nodes, four ranks per node, and one allocation per point. The Dask
+controller itself consumes a separate compute node while its workers run.
+The script stops on a failed stage and retains logs and results in the output
+directory. Use a new directory when retrying.
+
+This pilot uses an identity-grid fixture. Publication comparisons require the
+production grids and tolerances selected after the pilot, and independent
+allocations. The detailed commands below describe those cases.
+
 ## Matched MPI and Python scaling
 
 The scaling drivers share a fixture manifest and a result format. The original
