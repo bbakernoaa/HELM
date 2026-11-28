@@ -30,6 +30,35 @@ the estimate, fit raises an error. Individual storage tiles must fit on a worker
 before splitting. This estimate applies per task rather than to total
 worker memory. Apply passes only referenced source values to each weight task, including reconstruction neighbors. Storage reads still follow Dask chunk boundaries.
 
+## Category fractions and means
+
+Fit with `method="conservative"` and `norm="dstarea"` (the defaults).
+Pass a one-dimensional category map and the classes you want to report.
+Optional numeric fields, such as leaf area index (LAI), must use the same
+source cells in the same order. Both the category map and the fields must
+be Dask-backed xarray DataArrays. If an input supplies a source-cell index,
+it must agree with the other supplied indexes. For floating-point
+categories, use the exact values stored in the category map.
+
+```python
+# land_use has dimension (cell), and lai has dimensions (time, cell).
+fractions = regridder.apply_categorical(land_use, dim="cell", classes=[10, 40])
+by_class = regridder.apply_categorical(
+    land_use, dim="cell", classes=[10, 40], fields={"lai": lai}
+)
+```
+
+Both datasets contain `fraction(category, cell)` in the requested class
+order. Fractions are dimensionless shares of the full destination-cell
+area. Missing labels, unlisted classes, and masked sources can cause
+the fractions to sum to less than one.
+
+`by_class` also contains `lai(category, time, cell)` in the input LAI units.
+Each mean uses the overlap area of the class with finite LAI values at
+that time. Missing LAI leaves the class fraction unchanged. A class with
+zero overlap has fraction zero, and a class with zero valid overlap for a
+field has a NaN mean. Compute either lazy dataset while the client is active.
+
 ## Other methods
 
 Specify `method="nearest_neighbor"`, `"bilinear"`, `"bicubic"`, or `"patch"`

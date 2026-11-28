@@ -131,3 +131,142 @@ def test_apply_gathers_only_columns_used_by_weight_block():
         assert len(requests) == 1
         np.testing.assert_array_equal(requests[0][1], [0])
         np.testing.assert_allclose(regridder.apply(data, dim="cell").compute(), [2.0])
+
+
+def polar_triangle(west, east):
+    nodes = np.array([[west, 0], [east, 0], [0, 90]], dtype=float)
+    return nodes, np.array([0, 3]), np.arange(3)
+
+
+@pytest.fixture(scope="module")
+def categorical_client():
+    distributed = pytest.importorskip("distributed")
+    with distributed.Client(n_workers=2, threads_per_worker=1, processes=False, dashboard_address=None) as client:
+        yield client
+
+
+def test_categorical_fractions(categorical_client):
+    da = pytest.importorskip("dask.array")
+    pd = pytest.importorskip("pandas")
+    west = MeshTile(1, partial(polar_triangle, 0, 2))
+    east = MeshTile(1, partial(polar_triangle, 2, 4))
+    whole = MeshTile(1, partial(polar_triangle, 0, 4))
+    masked = MeshTile(1, lambda: (*cell(20), np.zeros(1, dtype=np.int32)))
+    inactive_target = MeshTile(1, partial(cell, 20))
+    outside = MeshTile(1, partial(cell, 40))
+    regridder = DistributedRegridder(categorical_client).fit([west, east, masked], [outside, east, whole, west, inactive_target])
+    labels = xr.DataArray(da.from_array([10, 40, 10], chunks=1), dims="cell")
+    result = regridder.apply_categorical(labels, dim="cell", classes=[40, 10, 99])
+    assert result.fraction.dims == ("category", "cell")
+    assert isinstance(result.fraction.data, da.Array)
+    np.testing.assert_array_equal(result.category, [40, 10, 99])
+    np.testing.assert_allclose(
+        result.fraction.compute(),
+        [[0, 1, 0.5, 0, 0], [0, 0, 0.5, 1, 0], [0, 0, 0, 0, 0]],
+        rtol=0,
+        atol=1e-10,
+    )
+    partial_result = regridder.apply_categorical(labels, dim="cell", classes=[40])
+    np.testing.assert_allclose(partial_result.fraction.compute(), [[0, 1, 0.5, 0, 0]], rtol=0, atol=1e-10)
+
+    missing = xr.DataArray(da.from_array(np.array(["forest", pd.NA, None], dtype=object), chunks=1), dims="cell")
+    result = regridder.apply_categorical(missing, dim="cell", classes=["forest"])
+    np.testing.assert_array_equal(result.category, ["forest"])
+    np.testing.assert_allclose(result.fraction.compute(), [[0, 0, 0.5, 1, 0]], rtol=0, atol=1e-10)
+    string_dtype = getattr(getattr(np, "dtypes", None), "StringDType", None)
+    if string_dtype is not None:
+        values = np.array(["forest", "missing", "forest"], dtype=string_dtype(na_object="missing"))
+        text_labels = missing.copy(data=da.from_array(values, chunks=1))
+        result = regridder.apply_categorical(text_labels, dim="cell", classes=["forest", "missing"])
+        np.testing.assert_allclose(result.fraction.compute(), [[0, 0, 0.5, 1, 0], [0, 0, 0, 0, 0]], rtol=0, atol=1e-10)
+
+
+@pytest.mark.parametrize("dtype", ["int64", "float64"])
+def test_categorical_preserves_large_integer_labels(categorical_client, dtype):
+    da = pytest.importorskip("dask.array")
+    tile = MeshTile(1, partial(cell, 0))
+    regridder = DistributedRegridder(categorical_client).fit([tile], [tile])
+    large = 2**53 + 1
+    labels = xr.DataArray(da.from_array(np.array([large], dtype=dtype), chunks=1), dims="cell")
+    result = regridder.apply_categorical(labels, dim="cell", classes=[np.int64(large), float(large - 1), 0.5]).compute()
+    assert result.category.values.tolist() == [large, float(large - 1), 0.5]
+    expected = [[1], [0], [0]] if dtype == "int64" else [[0], [1], [0]]
+    np.testing.assert_allclose(result.fraction, expected, rtol=0, atol=1e-10)
+
+
+def test_categorical_fraction_validation(categorical_client):
+    da = pytest.importorskip("dask.array")
+    tile = MeshTile(1, partial(cell, 0))
+    labels = xr.DataArray(da.from_array([10], chunks=1), dims="cell")
+    regridder = DistributedRegridder(categorical_client)
+    with pytest.raises(RuntimeError, match="fit"):
+        regridder.apply_categorical(labels, dim="cell", classes=[10])
+
+    for config in ({"method": "nearest_neighbor"}, {"norm": "fracarea"}):
+        unsupported = DistributedRegridder(categorical_client, **config).fit([tile], [tile])
+        with pytest.raises(ValueError, match="conservative.*dstarea"):
+            unsupported.apply_categorical(labels, dim="cell", classes=[10])
+
+    regridder.fit([tile], [tile])
+    for classes in ([], [10, 10], [np.nan], [10, "forest"], "forest"):
+        with pytest.raises(ValueError, match="classes"):
+            regridder.apply_categorical(labels, dim="cell", classes=classes)
+    for invalid in (labels.compute(), labels.expand_dims("time"), labels.rename(cell="other"), labels.isel(cell=slice(0, 0))):
+        with pytest.raises(ValueError, match="labels"):
+            regridder.apply_categorical(invalid, dim="cell", classes=[10])
+
+
+def test_categorical_means(categorical_client):
+    da = pytest.importorskip("dask.array")
+    source = [MeshTile(1, partial(polar_triangle, west, east)) for west, east in [(0, 1), (1, 4)]]
+    target = MeshTile(1, partial(polar_triangle, 0, 4))
+    regridder = DistributedRegridder(categorical_client).fit(source, [target])
+    labels = xr.DataArray(da.from_array([10, 10], chunks=1), dims="cell", coords={"cell": [100, 101]})
+    lai = xr.DataArray(
+        da.from_array([[4, 4, 4, np.nan], [12, np.nan, np.inf, -np.inf]], chunks=(1, 2)),
+        dims=("cell", "time"),
+        coords={"cell": labels.cell, "time": [0, 1, 2, 3]},
+    )
+    result = regridder.apply_categorical(labels, dim="cell", classes=[10, 40], fields={"lai": lai})
+    assert result.lai.dims == ("category", "cell", "time")
+    assert isinstance(result.lai.data, da.Array)
+    xr.testing.assert_identical(result.time, lai.time)
+    assert "cell" not in result.coords
+    computed = result.compute()
+    np.testing.assert_allclose(computed.fraction, [[1], [0]], rtol=0, atol=1e-10)
+    np.testing.assert_allclose(computed.lai, [[[10, 4, 4, np.nan]], [[np.nan, np.nan, np.nan, np.nan]]], rtol=0, atol=1e-10)
+
+    split = labels.copy(data=da.from_array([10, 40], chunks=1))
+    result = regridder.apply_categorical(split, dim="cell", classes=[40, 10], fields={"lai": lai.isel(time=0)}).compute()
+    np.testing.assert_allclose(result.fraction, [[0.75], [0.25]], rtol=0, atol=1e-10)
+    np.testing.assert_allclose(result.lai, [[12], [4]], rtol=0, atol=1e-10)
+
+
+def test_categorical_mean_validation(categorical_client):
+    da = pytest.importorskip("dask.array")
+    tile = MeshTile(1, partial(cell, 0))
+    regridder = DistributedRegridder(categorical_client).fit([tile], [tile])
+    labels = xr.DataArray(da.from_array([10], chunks=1), dims="cell", coords={"cell": [100]})
+    lai = labels.astype(float).expand_dims(time=[0])
+
+    for invalid in (lai.compute(), lai.isel(cell=slice(0, 0)), lai.rename(cell="other"), lai.astype(str)):
+        with pytest.raises(ValueError, match="lai"):
+            regridder.apply_categorical(labels, dim="cell", classes=[10], fields={"lai": invalid})
+
+    with pytest.raises(ValueError, match="source-cell index"):
+        regridder.apply_categorical(labels, dim="cell", classes=[10], fields={"lai": lai.assign_coords(cell=[101])})
+
+    indexed_labels = labels.drop_vars("cell").assign_coords(label_id=("cell", [100])).set_xindex("label_id")
+    indexed_lai = lai.drop_vars("cell").assign_coords(field_id=("cell", [101])).set_xindex("field_id")
+    with pytest.raises(ValueError, match="source-cell index"):
+        regridder.apply_categorical(indexed_labels, dim="cell", classes=[10], fields={"lai": indexed_lai})
+
+    for name in ("fraction", "category", "time", "cell"):
+        with pytest.raises(ValueError, match="reserved"):
+            regridder.apply_categorical(labels, dim="cell", classes=[10], fields={name: lai})
+
+    with pytest.raises(ValueError, match="category"):
+        regridder.apply_categorical(labels, dim="cell", classes=[10], fields={"lai": lai.expand_dims("category")})
+
+    with pytest.raises(ValueError, match="time"):
+        regridder.apply_categorical(labels, dim="cell", classes=[10], fields={"lai": lai, "other": lai.assign_coords(time=[1])})

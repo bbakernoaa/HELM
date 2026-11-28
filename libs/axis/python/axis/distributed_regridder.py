@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -217,6 +217,49 @@ def _block_columns(block: tuple[bytes, tuple[Any, ...] | None] | None) -> np.nda
     return np.unique(np.concatenate((active, *required)))
 
 
+def _object_category_mask(values: np.ndarray, *, label: int | float | str) -> np.ndarray:
+    def matches(value: Any) -> bool:
+        if isinstance(value, np.generic):
+            value = value.item()
+        return isinstance(value, (int, float, str, np.floating)) and bool(value == label)
+
+    return np.fromiter(map(matches, values), dtype=bool, count=values.size)
+
+
+def _category_mask(labels: xr.DataArray, label: int | float | str) -> xr.DataArray:
+    kind = labels.dtype.kind
+    if kind == "O":
+        return labels.copy(data=labels.data.map_blocks(_object_category_mask, label=label, dtype=bool))
+    if kind == "T":
+        missing = getattr(labels.dtype, "na_object", None)
+        if isinstance(missing, str) and label == missing:
+            return xr.zeros_like(labels, dtype=bool)
+
+    # Reject lossy coercions that could make one source cell match two classes.
+    if kind in "biu" and isinstance(label, (float, np.floating)):
+        integer = int(label)
+        if label != integer:
+            return xr.zeros_like(labels, dtype=bool)
+        label = integer
+    if kind == "f" and not isinstance(label, str):
+        try:
+            with np.errstate(over="ignore"):
+                encoded = labels.dtype.type(label)
+        except OverflowError:
+            return xr.zeros_like(labels, dtype=bool)
+        if not np.isfinite(encoded) or encoded.item() != label:
+            return xr.zeros_like(labels, dtype=bool)
+        label = encoded
+    return labels == label
+
+
+def _source_cell_index(data: xr.DataArray, dim: str) -> xr.Index | None:
+    indexes = [index for index, coords in data.xindexes.group_by_index() if any(dim in var.dims for var in coords.values())]
+    if len(indexes) > 1:
+        raise ValueError(f"multiple source-cell indexes on {dim!r} make cell identity ambiguous")
+    return indexes[0] if indexes else None
+
+
 class DistributedRegridder:
     """Build reusable weight blocks on Dask workers for spherical UGRID tiles."""
 
@@ -379,3 +422,91 @@ class DistributedRegridder:
         return xr.DataArray(
             da.block(output.tolist()), dims=ordered.dims, coords=coords, name=data.name, attrs=data.attrs
         ).transpose(*data.dims)
+
+    def apply_categorical(
+        self,
+        labels: xr.DataArray,
+        *,
+        dim: str,
+        classes: Sequence[int | float | str],
+        fields: Mapping[str, xr.DataArray] | None = None,
+    ) -> xr.Dataset:
+        """Return lazy whole-cell area fractions and optional means by category."""
+        import dask.array as da
+
+        if not self._blocks:
+            raise RuntimeError("fit must complete before apply_categorical")
+        if self._method != "conservative" or self._norm != "dstarea":
+            raise ValueError("apply_categorical requires method='conservative' and norm='dstarea'")
+        if labels.dims != (dim,) or labels.chunks is None or not isinstance(labels.data, da.Array):
+            raise ValueError(f"labels must be a one-dimensional Dask-backed DataArray on {dim!r}")
+        if labels.sizes[dim] != sum(self._source_sizes):
+            raise ValueError("labels must match the fitted source cell dimension")
+        if labels.dtype.kind not in "biufUTO":
+            raise ValueError("labels must contain numeric or string categories")
+        if dim in {"category", "fraction"} or "category" in labels.coords:
+            raise ValueError("'category' and 'fraction' are reserved output names")
+        if isinstance(classes, (str, bytes)):
+            raise ValueError("classes must be a sequence of labels")
+        try:
+            categories = tuple(label.item() if isinstance(label, np.generic) else label for label in classes)
+        except TypeError as error:
+            raise ValueError("classes must be a sequence of labels") from error
+        numeric = all(
+            isinstance(label, (int, np.integer)) or isinstance(label, (float, np.floating)) and np.isfinite(label)
+            for label in categories
+        )
+        if not categories or not (numeric or all(isinstance(label, str) for label in categories)):
+            raise ValueError("classes must contain finite numeric labels or strings")
+        if len(set(categories)) != len(categories):
+            raise ValueError("classes must contain unique labels")
+        values = np.asarray(categories)
+        if values.tolist() != list(categories):
+            values = np.asarray(categories, dtype=object)
+        category = xr.IndexVariable("category", values)
+
+        supplied = {} if fields is None else fields
+        if not isinstance(supplied, Mapping):
+            raise ValueError("fields must be a mapping of names to source DataArrays")
+        source_index = _source_cell_index(labels, dim) if supplied else None
+        reserved_names: set[Hashable] = {"category", "fraction", dim}
+        for name, data in supplied.items():
+            if (
+                not isinstance(data, xr.DataArray)
+                or data.sizes.get(dim) != sum(self._source_sizes)
+                or data.dtype.kind not in "iuf"
+                or data.chunks is None
+                or not isinstance(data.data, da.Array)
+            ):
+                raise ValueError(f"field {name!r} must be a real numeric Dask-backed DataArray on the fitted source dimension")
+            if "category" in data.dims or "category" in data.coords:
+                raise ValueError(f"field {name!r} collides with the output 'category' coordinate")
+            index = _source_cell_index(data, dim)
+            if index is not None:
+                if source_index is not None and not source_index.equals(index):
+                    raise ValueError(f"field {name!r} has a conflicting source-cell index on {dim!r}")
+                source_index = index
+            reserved_names.update(data.dims)
+            reserved_names.update(key for key, coord in data.coords.items() if dim not in coord.dims)
+        for name in supplied:
+            if not isinstance(name, str) or not name or name in reserved_names:
+                raise ValueError(f"invalid or reserved field name {name!r}")
+
+        # The fitted weights and the validated input arrays share positional cell order.
+        labels = xr.DataArray(labels.data, dims=(dim,))
+        fractions = []
+        means: dict[str, list[xr.DataArray]] = {name: [] for name in supplied}
+        finite = {name: np.isfinite(data) for name, data in supplied.items()}
+        for label in categories:
+            mask = _category_mask(labels, label)
+            fractions.append(self.apply(mask.astype(np.float64), dim=dim))
+            for name, data in supplied.items():
+                valid = mask & finite[name]
+                numerator = self.apply(data.where(valid, 0), dim=dim)
+                denominator = self.apply(valid.astype(np.float64), dim=dim)
+                mean = (numerator / denominator.where(denominator > 0)).transpose(*data.dims)
+                means[name].append(mean.assign_attrs(data.attrs))
+
+        outputs = [xr.concat(fractions, dim=category).to_dataset(name="fraction")]
+        outputs.extend(xr.concat(parts, dim=category).to_dataset(name=name) for name, parts in means.items())
+        return xr.merge(outputs, join="exact", compat="equals")
